@@ -58,6 +58,9 @@ module numint
 
   integer, parameter, public    :: TAYLOR = 1
   integer, parameter, public    :: RK4    = 2
+  integer, parameter, public    :: RK8    = 3
+  integer, parameter, public    :: RK3    = 4
+  integer, parameter, public    :: RKimp  = 5
 
   integer, parameter            :: INT_METHOD_VSSC = 1                          !< Variable step Störmer-Cowell according to M. Berry (2004)
   integer, parameter            :: INT_METHOD_FGJ  = 2                          !< Fixed step Gauß-Jackson
@@ -694,6 +697,12 @@ contains
         this%cov_int_method = TAYLOR
       case(RK4)
         this%cov_int_method = RK4
+      case(RK8)
+        this%cov_int_method = RK8
+      case(RK3)
+        this%cov_int_method = RK3 
+      case(RKimp)
+        this%cov_int_method = RKimp  
       case default
         this%cov_int_method = RK4
     end select
@@ -832,26 +841,29 @@ end subroutine
     type(Thirdbody_class),intent(inout)             :: thirdbody_model
     type(Tides_class),intent(inout)                 :: tides_model
     type(Derivatives_class),intent(inout)           :: derivatives_model
-    type(Reduction_type),intent(inout)             :: reduction
+    type(Reduction_type),intent(inout)              :: reduction
     real(dp), dimension(3), intent(in)              :: r
     real(dp), dimension(3), intent(in)              :: v
     real(dp),               intent(in)              :: reqt
-    real(dp), dimension(setdim,setdim), intent(out) :: set
+    real(kind=16), dimension(setdim,setdim), intent(inout) :: set
+    real(kind=16), dimension(setdim,setdim) :: set_imp
+    real(dp), dimension(setdim,setdim) :: set_aux
 
-    real(dp), dimension(setdim,setdim) :: k1,k2,k3,k4
-    real(dp), dimension(setdim,setdim) :: pdm
+    real(kind=16), dimension(setdim,setdim) :: k1,k2,k3,k4,k5,k6,k7,k8,k9,k10, khelp, khelp2, k1_imp, k2_imp, k3_imp
+    real(kind=16), dimension(setdim,setdim) :: pdm
 
-    integer :: reset
+    integer :: reset, i
 
     real(dp) :: dt
     real(dp) :: reqt_loc
     real(dp) :: time_mjd        ! MJD of current point in time
-    real(dp) :: t1,t2,t3        ! auxiliaries
-    real(dp) :: t1d, t2d, t3d   ! auxiliaries
+    real(dp) :: t1,t2,t3,t4,t5,t6,t7,t8,t9,t10,t1_imp,t2_imp,t3_imp       ! auxiliaries
+    real(dp) :: t1d, t2d, t3d, t4d, t5d, t6d, t7d, t8d, t9d, t10d, thelp, t1d_imp, t2d_imp, t3d_imp   ! auxiliaries
     real(dp) :: eps8 = 1.d-8    !< auxiliary
 
-
-    type(state_t), dimension(3) :: state    ! different states for RK4 method (3 points in time)
+    type(state_t), dimension(3) :: state
+    type(state_t), dimension(3) :: state_imp 
+    type(state_t), dimension(10) :: state_rk8    ! different states for RK4 method (3 points in time)
 
     ! NOTE: the time_mjd is computed from the passed offset with the start epoch - the latter is set by NEPTUNE's input routine
     !       Be careful when calling this from any other module.
@@ -864,7 +876,8 @@ end subroutine
     if(this%cov_int_method == TAYLOR) then
 
       !** reset state error transition matrix
-      call identity_matrix(set)
+      ! call identity_matrix(set_aux)
+      ! set = set_aux
 
       !** get partial derivatives matrix
       call derivatives_model%deriv_cov(                     &
@@ -901,8 +914,10 @@ end subroutine
     else if(this%cov_int_method == RK4) then
 
       !** reset state error transition matrix
-      call identity_matrix(set)
-
+      call identity_matrix(set_aux)
+      set = set_aux
+      ! set_imp = set_aux
+      ! set_imp = set
       !** if called for the first time, use initial state vector
       if(this%countCallsSetMatrix == 1) then
         state(1) = this%initialState
@@ -914,15 +929,94 @@ end subroutine
       state(3)%v = v
 
       t1 = reqt - this%covIntegrationStep
-      t2 = reqt - 0.5d0*this%covIntegrationStep
+      t2 = reqt - (0.5d0)*this%covIntegrationStep
       t3 = reqt
 
       t1d = this%start_epoch%mjd + t1/sec_per_day
       t2d = this%start_epoch%mjd + t2/sec_per_day
       t3d = this%start_epoch%mjd + t3/sec_per_day
+      
+
+      ! state_imp(1) = state(1)
+      ! t1_imp = reqt - this%covIntegrationStep
+      ! t2_imp = reqt - this%covIntegrationStep + this%covIntegrationStep*((6.d0 - sqrt(6.d0))/10.d0)
+      ! t3_imp = reqt - this%covIntegrationStep + this%covIntegrationStep*((6.d0 + sqrt(6.d0))/10.d0)
+      ! t1d_imp = this%start_epoch%mjd + t1_imp/sec_per_day
+      ! t2d_imp = this%start_epoch%mjd + t2_imp/sec_per_day
+      ! t3d_imp = this%start_epoch%mjd + t3_imp/sec_per_day
+      ! ! write(*,*) this%covIntegrationStep
+      ! ! write(*,*) t1
+      ! ! write(*,*) t3
+
+      ! k1_imp = 0.d0
+      ! k2_imp = 0.d0
+      ! k3_imp = 0.d0
+
+      ! if(abs(this%saved_time_offset - t3_imp) < eps8) then
+      !   state_imp(3) = this%saved_state
+      ! else
+      !     !read(*,*)
+      !     !** find states 2 and 3 through interpolation
+      !     call this%varstormcow(                             &
+      !                   gravity_model,                       &
+      !                   atmosphere_model,                    &
+      !                   manoeuvres_model,                    &
+      !                   radiation_model,                     &
+      !                   satellite_model,                     &
+      !                   solarsystem_model,                   &
+      !                   thirdbody_model,                     &
+      !                   tides_model,                         &
+      !                   derivatives_model,                   &
+      !                   reduction,                           &
+      !                   t3_imp,                                  &      ! <--  DBL   requested time (s)
+      !                   .false.,                             &
+      !                   reqt_loc,                            &      ! <--  DBL   current time (s)
+      !                   state_imp(3)%r,                          &      ! <--> DBL() radius vector (km)
+      !                   state_imp(3)%v,                          &      ! <--> DBL() velocity vector (km/s)
+      !                   reset,                               &      ! <--  INT   reset flag
+      !                   dt                                   &      ! -->  DBL   propagated time (s)
+      !                 )
+          
+          
+      !     if(hasFailed()) return
+      ! end if
+
+
+
+
+
+      ! if(abs(this%saved_time_offset - t2_imp) < eps8) then
+      !     state_imp(2) = this%saved_state
+      ! else
+      !     !read(*,*)
+      !     !** find states 2 and 3 through interpolation
+      !     call this%varstormcow(                             &
+      !                   gravity_model,                       &
+      !                   atmosphere_model,                    &
+      !                   manoeuvres_model,                    &
+      !                   radiation_model,                     &
+      !                   satellite_model,                     &
+      !                   solarsystem_model,                   &
+      !                   thirdbody_model,                     &
+      !                   tides_model,                         &
+      !                   derivatives_model,                   &
+      !                   reduction,                           &
+      !                   t2_imp,                                  &      ! <--  DBL   requested time (s)
+      !                   .false.,                             &
+      !                   reqt_loc,                            &      ! <--  DBL   current time (s)
+      !                   state_imp(2)%r,                          &      ! <--> DBL() radius vector (km)
+      !                   state_imp(2)%v,                          &      ! <--> DBL() velocity vector (km/s)
+      !                   reset,                               &      ! <--  INT   reset flag
+      !                   dt                                   &      ! -->  DBL   propagated time (s)
+      !                 )
+          
+          
+      !     if(hasFailed()) return
+      ! end if
+
 
       if(abs(this%saved_time_offset - t2) < eps8) then
-          state(2) = this%saved_state
+        state(2) = this%saved_state
       else
           !read(*,*)
           !** find states 2 and 3 through interpolation
@@ -945,8 +1039,22 @@ end subroutine
                         reset,                               &      ! <--  INT   reset flag
                         dt                                   &      ! -->  DBL   propagated time (s)
                       )
+          
+          
           if(hasFailed()) return
       end if
+      !write(*,*) state(1)%r, state(2)%r, state(3)%r
+      !write(*,*) state(1)%v, state(2)%v, state(3)%v
+      ! write(*,*) reset
+
+      ! write(*,*) "_______________________________________________________________"
+      ! write(*,*) this%covIntegrationStep
+      ! write(*,*) t1d, state(1)%r, state(1)%v
+      ! write(*,*) t2d, state(2)%r, state(2)%v
+      ! write(*,*) t3d, state(3)%r, state(3)%v
+      ! write(*,*) "______________________________________________________________"
+
+
 
       !** evaluate derivative of SET matrix for RK states
       call derivatives_model%deriv_cov(                     &
@@ -1003,11 +1111,78 @@ end subroutine
                                         t3d,                &
                                         k4)
       if(hasFailed()) return
+      
+      ! RK4: 
+      set = set + (this%covIntegrationStep/6.d0)*(k1 + 2.d0*k2 + 2.d0*k3 + k4)
+      ! write(*,*) t1d, ":",  k1
+      ! write(*,*) state(2)%r, state(2)%v
+      ! write(*,*) set + 0.5d0*this%covIntegrationStep*k2
+      ! write(*,*) t2d, ":",  k3
+      ! write(*,*) t3d, ":",  k4
+    
+      ! write(*,*) t3d, ":",  (this%covIntegrationStep/6.d0)*(k1 + 2.d0*k2 + 2.d0*k3 + k4)
+      !set = set + this%covIntegrationStep*k1
+      ! write(*,*) reqt, set
+      
 
-      set = set + this%covIntegrationStep/6.d0*(k1 + 2.0*k2 + 2.d0*k3 + k4)
+
+      ! do i = 0,12
+
+      !   call derivatives_model%deriv_cov(                     &
+      !                                   gravity_model,      &
+      !                                   atmosphere_model,   &
+      !                                   radiation_model,    &
+      !                                   satellite_model,    &
+      !                                   solarsystem_model,  &
+      !                                   thirdbody_model,    &
+      !                                   reduction,          &
+      !                                   state_imp(1)%r,         &
+      !                                   state_imp(1)%v,         &
+      !                                   set_imp + (1.d0/9.d0)*k1_imp + ((-1.d0 - sqrt(6.d0))/18.d0)*k2_imp + ((-1.d0 + sqrt(6.d0))/18.d0)*k3_imp,                &
+      !                                   t1d_imp,                &
+      !                                   k1_imp)
+      !   if(hasFailed()) return
+      !   call derivatives_model%deriv_cov(gravity_model,       &
+      !                                     atmosphere_model,   &
+      !                                     radiation_model,    &
+      !                                     satellite_model,    &
+      !                                     solarsystem_model,  &
+      !                                     thirdbody_model,    &
+      !                                     reduction,          &
+      !                                     state_imp(2)%r,         &
+      !                                     state_imp(2)%v,         &
+      !                                     set_imp + (1.d0/9.d0)*k1_imp + ((88.d0 + 7*sqrt(6.d0))/360.d0)*k2_imp + ((88.d0 - 43*sqrt(6.d0))/360.d0)*k3_imp, &
+      !                                     t2d_imp,                &
+      !                                     k2_imp)
+      !   if(hasFailed()) return
+      !   call derivatives_model%deriv_cov(gravity_model,       &
+      !                                     atmosphere_model,   &
+      !                                     radiation_model,    &
+      !                                     satellite_model,    &
+      !                                     solarsystem_model,  &
+      !                                     thirdbody_model,    &
+      !                                     reduction,          &
+      !                                     state_imp(2)%r,         &
+      !                                     state_imp(2)%v,         &
+      !                                     set_imp + (1.d0/9.d0)*k1_imp + ((88.d0 + 43*sqrt(6.d0))/360.d0)*k2_imp + ((88.d0 - 7*sqrt(6.d0))/360.d0)*k3_imp, &
+      !                                     t3d_imp,                &
+      !                                     k3_imp)
+      !   if(hasFailed()) return
+      !   ! write(*,*) "k1: ", k1_imp
+
+      ! end do
+
+      ! set_imp = set_imp + (this%covIntegrationStep/9.d0)*(k1_imp + ((16 + sqrt(6.d0))/4.d0)*k2_imp + ((16 - sqrt(6.d0))/4.d0)*k3_imp)
+      ! ! write(*,*) reqt, set_imp
+      ! set = set_imp
+
+      
+      
+      ! kind of Riemann sum (alternative to simpson rule):
+      !set = set + this%covIntegrationStep*((k1+k4 )/2.0)
       !write(52,'(36(e14.7e2,x))') set
-
-    !write(*,*)
+      !write(*,*) "set2: ", set(1,1),  k2!, k2, k3, k4
+     !write(*,*)
     !write(*,*) "set with drag"
     !do i=1,6
     !  write(*,'(6(e22.15e2))') (set(i,j), j=1,6)
@@ -1017,7 +1192,691 @@ end subroutine
       !** save last state
       this%lastState = state(3)
 
+    
+    else if(this%cov_int_method == RK3) then
+
+
+      call identity_matrix(set_aux)
+      set = set_aux
+
+      if(this%countCallsSetMatrix == 1) then
+        state(1) = this%initialState
+      else
+        state(1) = this%lastState
+      end if
+
+      state(3)%r = r
+      state(3)%v = v
+
+      t1 = reqt - this%covIntegrationStep
+      t2 = reqt - (0.5d0)*this%covIntegrationStep
+      t3 = reqt
+
+      t1d = this%start_epoch%mjd + t1/sec_per_day
+      t2d = this%start_epoch%mjd + t2/sec_per_day
+      t3d = this%start_epoch%mjd + t3/sec_per_day
+      
+      if(abs(this%saved_time_offset - t2) < eps8) then
+        state(2) = this%saved_state
+      else
+          !read(*,*)
+          !** find states 2 and 3 through interpolation
+          call this%varstormcow(                             &
+                        gravity_model,                       &
+                        atmosphere_model,                    &
+                        manoeuvres_model,                    &
+                        radiation_model,                     &
+                        satellite_model,                     &
+                        solarsystem_model,                   &
+                        thirdbody_model,                     &
+                        tides_model,                         &
+                        derivatives_model,                   &
+                        reduction,                           &
+                        t2,                                  &      ! <--  DBL   requested time (s)
+                        .false.,                             &
+                        reqt_loc,                            &      ! <--  DBL   current time (s)
+                        state(2)%r,                          &      ! <--> DBL() radius vector (km)
+                        state(2)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                        reset,                               &      ! <--  INT   reset flag
+                        dt                                   &      ! -->  DBL   propagated time (s)
+                      )
+          
+          
+          if(hasFailed()) return
+      end if
+
+      ! write(*,*) "_______________________________________________________________"
+      ! write(*,*) this%covIntegrationStep
+      ! write(*,*) t1d, state(1)%r, state(1)%v
+      ! write(*,*) t2d, state(2)%r, state(2)%v
+      ! write(*,*) t3d, state(3)%r, state(3)%v
+      ! write(*,*) "______________________________________________________________"
+
+
+
+      !** evaluate derivative of SET matrix for RK states
+      call derivatives_model%deriv_cov(                     &
+                                        gravity_model,      &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state(1)%r,         &
+                                        state(1)%v,         &
+                                        set,                &
+                                        t1d,                &
+                                        k1)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(gravity_model,       &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state(2)%r,         &
+                                        state(2)%v,         &
+                                        set + 0.5d0*this%covIntegrationStep*k1, &
+                                        t2d,                &
+                                        k2)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(gravity_model,       &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state(3)%r,         &
+                                        state(3)%v,         &
+                                        set - 1.d0*this%covIntegrationStep*k1 + 2.d0*this%covIntegrationStep*k2,&
+                                        t3d,                &
+                                        k3)
+      if(hasFailed()) return
+      
+      ! RK3 (Simpson Rule): 
+      set = set + (this%covIntegrationStep/6.d0)*(k1 + 4.d0*k2 + k3)    
+      ! write(*,*) t1d , ":", k1
+      ! write(*,*) state(2)%r, state(2)%v
+      ! write(*,*) set + 0.5d0*this%covIntegrationStep*k1
+      ! write(*,*) t2d , ":", k2
+      ! write(*,*) t3d , ":", k3
+      ! write(*,*) t3d, ":",  (this%covIntegrationStep/6.d0)*(k1 + 4.d0*k2 + k3) 
+
+      this%lastState = state(3)
+
+    else if(this%cov_int_method == RKimp) then
+      call identity_matrix(set_aux)
+      set_imp = set_aux
+
+      if(this%countCallsSetMatrix == 1) then
+        state_imp(1) = this%initialState
+      else
+        state_imp(1) = this%lastState
+      end if
+
+      t1_imp = reqt - this%covIntegrationStep
+      t2_imp = reqt - this%covIntegrationStep + this%covIntegrationStep*((6.d0 - sqrt(6.d0))/10.d0)
+      t3_imp = reqt - this%covIntegrationStep + this%covIntegrationStep*((6.d0 + sqrt(6.d0))/10.d0)
+      t1d_imp = this%start_epoch%mjd + t1_imp/sec_per_day
+      t2d_imp = this%start_epoch%mjd + t2_imp/sec_per_day
+      t3d_imp = this%start_epoch%mjd + t3_imp/sec_per_day
+      
+
+      k1_imp = 0.d0
+      k2_imp = 0.d0
+      k3_imp = 0.d0
+
+      if(abs(this%saved_time_offset - t3_imp) < eps8) then
+        state_imp(3) = this%saved_state
+      else
+          !read(*,*)
+          !** find states 2 and 3 through interpolation
+          call this%varstormcow(                             &
+                        gravity_model,                       &
+                        atmosphere_model,                    &
+                        manoeuvres_model,                    &
+                        radiation_model,                     &
+                        satellite_model,                     &
+                        solarsystem_model,                   &
+                        thirdbody_model,                     &
+                        tides_model,                         &
+                        derivatives_model,                   &
+                        reduction,                           &
+                        t3_imp,                                  &      ! <--  DBL   requested time (s)
+                        .false.,                             &
+                        reqt_loc,                            &      ! <--  DBL   current time (s)
+                        state_imp(3)%r,                          &      ! <--> DBL() radius vector (km)
+                        state_imp(3)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                        reset,                               &      ! <--  INT   reset flag
+                        dt                                   &      ! -->  DBL   propagated time (s)
+                      )
+          
+          
+          if(hasFailed()) return
+      end if
+
+
+
+
+
+      if(abs(this%saved_time_offset - t2_imp) < eps8) then
+          state_imp(2) = this%saved_state
+      else
+          !read(*,*)
+          !** find states 2 and 3 through interpolation
+          call this%varstormcow(                             &
+                        gravity_model,                       &
+                        atmosphere_model,                    &
+                        manoeuvres_model,                    &
+                        radiation_model,                     &
+                        satellite_model,                     &
+                        solarsystem_model,                   &
+                        thirdbody_model,                     &
+                        tides_model,                         &
+                        derivatives_model,                   &
+                        reduction,                           &
+                        t2_imp,                                  &      ! <--  DBL   requested time (s)
+                        .false.,                             &
+                        reqt_loc,                            &      ! <--  DBL   current time (s)
+                        state_imp(2)%r,                          &      ! <--> DBL() radius vector (km)
+                        state_imp(2)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                        reset,                               &      ! <--  INT   reset flag
+                        dt                                   &      ! -->  DBL   propagated time (s)
+                      )
+          
+          
+          if(hasFailed()) return
+      end if
+
+
+      
+      !write(*,*) state(1)%r, state(2)%r, state(3)%r
+      !write(*,*) state(1)%v, state(2)%v, state(3)%v
+      ! write(*,*) reset
+
+      ! write(*,*) "_______________________________________________________________"
+      ! write(*,*) this%covIntegrationStep
+      ! write(*,*) t1d_imp, state_imp(1)%r, state_imp(1)%v
+      ! write(*,*) t2d_imp, state_imp(2)%r, state_imp(2)%v
+      ! write(*,*) t3d_imp, state_imp(3)%r, state_imp(3)%v
+      ! write(*,*) "______________________________________________________________"
+
+
+      
+
+
+      do i = 0,30
+
+        call derivatives_model%deriv_cov(                     &
+                                        gravity_model,      &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_imp(1)%r,         &
+                                        state_imp(1)%v,         &
+                                        set_imp + this%covIntegrationStep*((1.d0/9.d0)*k1_imp + ((-1.d0 - sqrt(6.d0))/18.d0)*k2_imp + ((-1.d0 + sqrt(6.d0))/18.d0)*k3_imp),                &
+                                        t1d_imp,                &
+                                        k1_imp)
+        if(hasFailed()) return
+        call derivatives_model%deriv_cov(gravity_model,       &
+                                          atmosphere_model,   &
+                                          radiation_model,    &
+                                          satellite_model,    &
+                                          solarsystem_model,  &
+                                          thirdbody_model,    &
+                                          reduction,          &
+                                          state_imp(2)%r,         &
+                                          state_imp(2)%v,         &
+                                          set_imp + this%covIntegrationStep*((1.d0/9.d0)*k1_imp + ((88.d0 + 7*sqrt(6.d0))/360.d0)*k2_imp + ((88.d0 - 43.d0*sqrt(6.d0))/360.d0)*k3_imp), &
+                                          t2d_imp,                &
+                                          k2_imp)
+        if(hasFailed()) return
+        call derivatives_model%deriv_cov(gravity_model,       &
+                                          atmosphere_model,   &
+                                          radiation_model,    &
+                                          satellite_model,    &
+                                          solarsystem_model,  &
+                                          thirdbody_model,    &
+                                          reduction,          &
+                                          state_imp(2)%r,         &
+                                          state_imp(2)%v,         &
+                                          set_imp + this%covIntegrationStep*((1.d0/9.d0)*k1_imp + ((88.d0 + 43.d0*sqrt(6.d0))/360.d0)*k2_imp + ((88.d0 - 7*sqrt(6.d0))/360.d0)*k3_imp), &
+                                          t3d_imp,                &
+                                          k3_imp)
+        if(hasFailed()) return
+      end do
+
+      set_imp = set_imp + (this%covIntegrationStep/9.d0)*(k1_imp + ((16 + sqrt(6.d0))/4.d0)*k2_imp + ((16 - sqrt(6.d0))/4.d0)*k3_imp)
+
+
+
+      ! write(*,*) reqt, set_imp
+      set = set_imp
+      state(3)%r = r
+      state(3)%v = v
+    
+      this%lastState = state(3)
+
+
+
+    else if(this%cov_int_method == RK8) then
+
+      !** reset state error transition matrix
+      call identity_matrix(set_aux)
+      set = set_aux
+
+      !** if called for the first time, use initial state vector
+      if(this%countCallsSetMatrix == 1) then
+        state_rk8(1) = this%initialState
+      else
+        state_rk8(1) = this%lastState
+      end if
+
+      state_rk8(8)%r = r
+      state_rk8(8)%v = v
+      state_rk8(10)%r = r
+      state_rk8(10)%v = v
+
+      t1 = reqt - this%covIntegrationStep
+      t2 = reqt - (23.d0/27.d0)*this%covIntegrationStep
+      t3 = reqt - (7.d0/9.d0)*this%covIntegrationStep
+      t4 = reqt - (2.d0/3.d0)*this%covIntegrationStep
+      t5 = reqt - (0.5d0)*this%covIntegrationStep
+      t6 = reqt - (1.d0/3.d0)*this%covIntegrationStep
+      t7 = reqt - (5.d0/6.d0)*this%covIntegrationStep
+      t8 = reqt
+      t9 = reqt - (1.d0/6.d0)*this%covIntegrationStep
+      t10 = reqt
+
+      t1d = this%start_epoch%mjd + t1/sec_per_day
+      t2d = this%start_epoch%mjd + t2/sec_per_day
+      t3d = this%start_epoch%mjd + t3/sec_per_day
+      t4d = this%start_epoch%mjd + t4/sec_per_day
+      t5d = this%start_epoch%mjd + t5/sec_per_day
+      t6d = this%start_epoch%mjd + t6/sec_per_day
+      t7d = this%start_epoch%mjd + t7/sec_per_day
+      t8d = this%start_epoch%mjd + t8/sec_per_day
+      t9d = this%start_epoch%mjd + t9/sec_per_day
+      t10d = this%start_epoch%mjd + t10/sec_per_day
+
+      if(abs(this%saved_time_offset - t2) < eps8) then
+          state_rk8(2) = this%saved_state
+      else
+          !read(*,*)
+          !** find states 2 and 3 through interpolation
+          call this%varstormcow(                             &
+                        gravity_model,                       &
+                        atmosphere_model,                    &
+                        manoeuvres_model,                    &
+                        radiation_model,                     &
+                        satellite_model,                     &
+                        solarsystem_model,                   &
+                        thirdbody_model,                     &
+                        tides_model,                         &
+                        derivatives_model,                   &
+                        reduction,                           &
+                        t2,                                  &      ! <--  DBL   requested time (s)
+                        .false.,                             &
+                        reqt_loc,                            &      ! <--  DBL   current time (s)
+                        state_rk8(2)%r,                          &      ! <--> DBL() radius vector (km)
+                        state_rk8(2)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                        reset,                               &      ! <--  INT   reset flag
+                        dt                                   &      ! -->  DBL   propagated time (s)
+                      )
+          
+          
+          if(hasFailed()) return
+      end if
+
+      if(abs(this%saved_time_offset - t3) < eps8) then
+        state_rk8(3) = this%saved_state
+      else
+          !read(*,*)
+          !** find states 2 and 3 through interpolation
+          call this%varstormcow(                             &
+                        gravity_model,                       &
+                        atmosphere_model,                    &
+                        manoeuvres_model,                    &
+                        radiation_model,                     &
+                        satellite_model,                     &
+                        solarsystem_model,                   &
+                        thirdbody_model,                     &
+                        tides_model,                         &
+                        derivatives_model,                   &
+                        reduction,                           &
+                        t3,                                  &      ! <--  DBL   requested time (s)
+                        .false.,                             &
+                        reqt_loc,                            &      ! <--  DBL   current time (s)
+                        state_rk8(3)%r,                          &      ! <--> DBL() radius vector (km)
+                        state_rk8(3)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                        reset,                               &      ! <--  INT   reset flag
+                        dt                                   &      ! -->  DBL   propagated time (s)
+                      )
+          
+          
+          if(hasFailed()) return
+      end if
+
+      if(abs(this%saved_time_offset - t4) < eps8) then
+        state_rk8(4) = this%saved_state
+      else
+        !read(*,*)
+        !** find states 2 and 3 through interpolation
+        call this%varstormcow(                             &
+                      gravity_model,                       &
+                      atmosphere_model,                    &
+                      manoeuvres_model,                    &
+                      radiation_model,                     &
+                      satellite_model,                     &
+                      solarsystem_model,                   &
+                      thirdbody_model,                     &
+                      tides_model,                         &
+                      derivatives_model,                   &
+                      reduction,                           &
+                      t4,                                  &      ! <--  DBL   requested time (s)
+                      .false.,                             &
+                      reqt_loc,                            &      ! <--  DBL   current time (s)
+                      state_rk8(4)%r,                          &      ! <--> DBL() radius vector (km)
+                      state_rk8(4)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                      reset,                               &      ! <--  INT   reset flag
+                      dt                                   &      ! -->  DBL   propagated time (s)
+                    )
+        
+        
+        if(hasFailed()) return
+      end if
+
+      if(abs(this%saved_time_offset - t5) < eps8) then
+        state_rk8(5) = this%saved_state
+      else
+        !read(*,*)
+        !** find states 2 and 3 through interpolation
+        call this%varstormcow(                             &
+                      gravity_model,                       &
+                      atmosphere_model,                    &
+                      manoeuvres_model,                    &
+                      radiation_model,                     &
+                      satellite_model,                     &
+                      solarsystem_model,                   &
+                      thirdbody_model,                     &
+                      tides_model,                         &
+                      derivatives_model,                   &
+                      reduction,                           &
+                      t5,                                  &      ! <--  DBL   requested time (s)
+                      .false.,                             &
+                      reqt_loc,                            &      ! <--  DBL   current time (s)
+                      state_rk8(5)%r,                          &      ! <--> DBL() radius vector (km)
+                      state_rk8(5)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                      reset,                               &      ! <--  INT   reset flag
+                      dt                                   &      ! -->  DBL   propagated time (s)
+                    )
+        
+        
+        if(hasFailed()) return
+      end if
+
+      if(abs(this%saved_time_offset - t6) < eps8) then
+        state_rk8(6) = this%saved_state
+      else
+        !read(*,*)
+        !** find states 2 and 3 through interpolation
+        call this%varstormcow(                             &
+                      gravity_model,                       &
+                      atmosphere_model,                    &
+                      manoeuvres_model,                    &
+                      radiation_model,                     &
+                      satellite_model,                     &
+                      solarsystem_model,                   &
+                      thirdbody_model,                     &
+                      tides_model,                         &
+                      derivatives_model,                   &
+                      reduction,                           &
+                      t6,                                  &      ! <--  DBL   requested time (s)
+                      .false.,                             &
+                      reqt_loc,                            &      ! <--  DBL   current time (s)
+                      state_rk8(6)%r,                          &      ! <--> DBL() radius vector (km)
+                      state_rk8(6)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                      reset,                               &      ! <--  INT   reset flag
+                      dt                                   &      ! -->  DBL   propagated time (s)
+                    )
+        
+        
+        if(hasFailed()) return
+      end if
+
+      if(abs(this%saved_time_offset - t7) < eps8) then
+        state_rk8(7) = this%saved_state
+      else
+        !read(*,*)
+        !** find states 2 and 3 through interpolation
+        call this%varstormcow(                             &
+                      gravity_model,                       &
+                      atmosphere_model,                    &
+                      manoeuvres_model,                    &
+                      radiation_model,                     &
+                      satellite_model,                     &
+                      solarsystem_model,                   &
+                      thirdbody_model,                     &
+                      tides_model,                         &
+                      derivatives_model,                   &
+                      reduction,                           &
+                      t7,                                  &      ! <--  DBL   requested time (s)
+                      .false.,                             &
+                      reqt_loc,                            &      ! <--  DBL   current time (s)
+                      state_rk8(7)%r,                          &      ! <--> DBL() radius vector (km)
+                      state_rk8(7)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                      reset,                               &      ! <--  INT   reset flag
+                      dt                                   &      ! -->  DBL   propagated time (s)
+                    )
+        
+        
+        if(hasFailed()) return
+      end if
+
+      if(abs(this%saved_time_offset - t9) < eps8) then
+        state_rk8(9) = this%saved_state
+      else
+        !read(*,*)
+        !** find states 2 and 3 through interpolation
+        call this%varstormcow(                             &
+                      gravity_model,                       &
+                      atmosphere_model,                    &
+                      manoeuvres_model,                    &
+                      radiation_model,                     &
+                      satellite_model,                     &
+                      solarsystem_model,                   &
+                      thirdbody_model,                     &
+                      tides_model,                         &
+                      derivatives_model,                   &
+                      reduction,                           &
+                      t9,                                  &      ! <--  DBL   requested time (s)
+                      .false.,                             &
+                      reqt_loc,                            &      ! <--  DBL   current time (s)
+                      state_rk8(9)%r,                          &      ! <--> DBL() radius vector (km)
+                      state_rk8(9)%v,                          &      ! <--> DBL() velocity vector (km/s)
+                      reset,                               &      ! <--  INT   reset flag
+                      dt                                   &      ! -->  DBL   propagated time (s)
+                    )
+        
+        
+        if(hasFailed()) return
+      end if
+
+      ! write(*,*) "_______________________________________________________________"
+      ! write(*,*) this%covIntegrationStep
+      ! write(*,*) t1d, state_rk8(1)%r, state_rk8(1)%v
+      ! write(*,*) t2d, state_rk8(2)%r, state_rk8(2)%v
+      ! write(*,*) t3d, state_rk8(3)%r, state_rk8(3)%v
+      ! write(*,*) t4d, state_rk8(4)%r, state_rk8(4)%v
+      ! write(*,*) t5d, state_rk8(5)%r, state_rk8(5)%v
+      ! write(*,*) t6d, state_rk8(6)%r, state_rk8(6)%v
+      ! write(*,*) t7d, state_rk8(7)%r, state_rk8(7)%v
+      ! write(*,*) t8d, state_rk8(8)%r, state_rk8(8)%v
+      ! write(*,*) t9d, state_rk8(9)%r, state_rk8(9)%v
+      ! write(*,*) t10d, state_rk8(10)%r, state_rk8(10)%v
+      ! write(*,*) "_______________________________________________________________"
+
+      
+      !** evaluate derivative of SET matrix for RK states
+      call derivatives_model%deriv_cov(                     &
+                                        gravity_model,      &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(1)%r,         &
+                                        state_rk8(1)%v,         &
+                                        set,                &
+                                        t1d,                &
+                                        k1)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(                     &
+                                        gravity_model,      &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(2)%r,         &
+                                        state_rk8(2)%v,         &
+                                        set+(4.d0/27.d0)*this%covIntegrationStep*k1,                &
+                                        t2d,                &
+                                        k2)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(gravity_model,       &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(3)%r,         &
+                                        state_rk8(3)%v,         &
+                                        set - (1.d0/18.d0)*this%covIntegrationStep*(k1+3.d0*k2), &
+                                        t3d,                &
+                                        k3)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(gravity_model,       &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(4)%r,         &
+                                        state_rk8(4)%v,         &
+                                        set + (1.d0/12.d0)*this%covIntegrationStep*(k1+3.d0*k3), &
+                                        t4d,                &
+                                        k4)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(                     &
+                                        gravity_model,      &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(5)%r,         &
+                                        state_rk8(5)%v,         &
+                                        set + (1.d0/8.d0)*this%covIntegrationStep*(k1+3.d0*k4),&
+                                        t5d,                &
+                                        k5)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(                     &
+                                        gravity_model,      &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(6)%r,         &
+                                        state_rk8(6)%v,         &
+                                        set + (1.d0/54.d0)*this%covIntegrationStep*(13.d0*k1-27.d0*k3+42.d0*k4+8.d0*k5),&
+                                        t6d,                &
+                                        k6)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(                     &
+                                        gravity_model,      &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(7)%r,         &
+                                        state_rk8(7)%v,         &
+                                        set + (1.d0/4320.d0)*this%covIntegrationStep*(389.d0*k1-54.d0*k3+966.d0*k4-824.d0*k5+243.d0*k6),&
+                                        t7d,                &
+                                        k7)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(gravity_model,       &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(8)%r,         &
+                                        state_rk8(8)%v,         &
+                                        set + (1.d0/20.d0)*this%covIntegrationStep*(-234.d0*k1+81.d0*k3-1164.d0*k4+656.d0*k5-122.d0*k6+800.d0*k7),&
+                                        t8d,                &
+                                        k8)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(gravity_model,       &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(9)%r,         &
+                                        state_rk8(9)%v,         &
+                                        set + (1.d0/288.d0)*this%covIntegrationStep*(-127.d0*k1+18.d0*k3-678.d0*k4+456.d0*k5-9.d0*k6+576.d0*k7+4.d0*k8),&
+                                        t9d,                &
+                                        k9)
+      if(hasFailed()) return
+      call derivatives_model%deriv_cov(gravity_model,       &
+                                        atmosphere_model,   &
+                                        radiation_model,    &
+                                        satellite_model,    &
+                                        solarsystem_model,  &
+                                        thirdbody_model,    &
+                                        reduction,          &
+                                        state_rk8(10)%r,         &
+                                        state_rk8(10)%v,         &
+                                        set + (1.d0/820.d0)*this%covIntegrationStep*(1481.d0*k1-81.d0*k3+7104.d0*k4-3376.d0*k5+72.d0*k6-5040.d0*k7-60.d0*k8+720.d0*k9),&
+                                        t10d,                &
+                                        k10)
+      if(hasFailed()) return
+
+      ! RK8: 
+      set = set + (this%covIntegrationStep/840.d0)*(41.d0*k1 + 27.d0*k4 + 272.d0*k5 + 27.d0*k6 + 216.d0*k7 + 216.d0*k9 + 41.d0*k10)
+      ! write(*,*) t1d , ":", k1
+      ! write(*,*) state_rk8(5)%r, state_rk8(5)%v
+      ! write(*,*) set + (1.d0/8.d0)*this%covIntegrationStep*(k1+3.d0*k4)
+      ! write(*,*) t5d , ":", k5
+      ! write(*,*) t8d , ":", k8
+      
+      ! write(*,*) t8d, ":", (this%covIntegrationStep/840.d0)*(41.d0*k1 + 27.d0*k4 + 272.d0*k5 + 27.d0*k6 + 216.d0*k7 + 216.d0*k9 + 41.d0*k10)
+      !** save last state
+      this%lastState = state_rk8(8)
+
+
+
+
     end if
+
 
     return
 ! write(*,*) "-----------------------------------"

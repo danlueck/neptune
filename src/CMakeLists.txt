@@ -8,6 +8,8 @@ set(SRC_FILES
     maneuvers.f90
     neptuneParameters.f90
     gravity.f90
+    rss_math.f90
+    rss_types.f90
     nrlmsise00Data.f90
     nrlmsise00Class.f90
     atmosphere.f90

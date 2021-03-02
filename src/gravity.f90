@@ -335,7 +335,6 @@ contains
     real(dp)  :: tempS              ! temporary coefficient S
     real(dp)  :: tempSigmaC         ! temporary Sigma C
     real(dp)  :: tempSigmaS         ! temporary Sigma S
-
     if(isControlled()) then
       if(hasToReturn()) return
       call checkIn(csubid)
@@ -749,7 +748,6 @@ contains
     real(dp) :: temp_t3             ! temporary
     real(dp) :: temp_t4             ! temporary
     real(dp) :: temp_t5             ! temporary
-
     if(isControlled()) then
       if(hasToReturn()) return
       call checkIn(csubid)
@@ -965,6 +963,8 @@ contains
     insig2 = 0.d0
     insig3 = 0.d0
 
+
+
     do l = 2,this%degree
 
       !** recursive computation of sin(ml) and cos(ml) (cos(0) and cos(1) as well as sin(0) and sin(1) have
@@ -1001,9 +1001,10 @@ contains
         insig2 = insig2 + temp_t2 * (cfac*this%coeffC(l,m)*this%costerm(m) + sfac*this%coeffS(l,m)*this%sinterm(m))
         ! lambda (longitudal) derivative of the potential
         insig3 = insig3 + temp_t3 * (sfac*this%coeffS(l,m)*this%costerm(m) - cfac*this%coeffC(l,m)*this%sinterm(m))
-
+       
       end do
     end do
+
 
     !==========================================================================
     !
@@ -1077,6 +1078,12 @@ contains
     real(dp) :: tanphi2                       ! tan(phi_gc) squared
     real(dp) :: temp
 
+
+
+
+
+
+
     if(.not. mag(r_itrf-this%current_radius) < eps9) then
       this%rabs    = mag(r_itrf)
       this%rabs2   = this%rabs*this%rabs
@@ -1097,12 +1104,45 @@ contains
       this%r1r2      = r_itrf(1)*r_itrf(1) + r_itrf(2)*r_itrf(2)
       this%sqrt_r1r2 = sqrt(this%r1r2)
 
+
+      this%lp(0,0) = 1.d0
+      this%lp(0,1) = 0.d0
+      this%lp(1,0) = sin(this%phi_gc)
+      this%lp(1,1) = cos(this%phi_gc)
+
+      !** determine legendre polynomials recursively
+      !if(.true.) then
+
+      ! STABLE
+      do m = 0, this%degree
+
+        do l = max(2,m), this%degree
+
+          if(l == m) then
+            this%lp(m,m) = (2*m-1)*this%lp(1,1)*this%lp(m-1,m-1)
+          else if(l == m + 1) then
+            this%lp(l,m) = (2*m+1)*this%lp(1,0)*this%lp(l-1,m)
+          else
+            this%lp(l,m) = ((2*l-1)*this%lp(1,0)*this%lp(l-1,m) - (l+m-1)*this%lp(l-2,m))/(l-m)
+          end if
+
+        end do
+
+      end do
+
+      
+
       !** compute derivatives du/dr, du/dphi and du/dlmb
       !----------------------------------------------------------------------
       call this%getPotentialDerivatives(this%oorabs, this%oorabs2, this%dudr, this%dudphi, this%dudlambda)
       !----------------------------------------------------------------------
 
     end if
+
+
+
+
+
 
     !** secans
     sec2 = (1.d0/cos(this%phi_gc))**2.d0
@@ -1272,7 +1312,6 @@ contains
     !
     !-----------------------------------------------------------------
     cov = ddr2*this%dudr + ddphi2*this%dudphi + ddlmb2*this%dudlambda + matmul(transpose(matmul(sd,ddr)),ddr)
-
      !write(*,*) "leaving gravityCov"
     !do i=1,3
     !  write(*,*) (cov(i,j), j=1,3)

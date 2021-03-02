@@ -850,33 +850,34 @@ contains
     real(dp), dimension(3),   intent(in)        :: r_eci
     real(dp), dimension(3),   intent(in)        :: v_eci
     real(dp),                 intent(in)        :: time_mjd
-    real(dp), dimension(:,:), intent(in)        :: setMatrix
+    real(kind=16), dimension(:,:), intent(in)        :: setMatrix
 
-    real(dp), dimension(size(setMatrix,1),size(setMatrix,1)), intent(out) :: dsetMatrix
+    real(kind=16), dimension(size(setMatrix,1),size(setMatrix,1)), intent(out) :: dsetMatrix
+    real(kind=16), dimension(size(setMatrix,1),size(setMatrix,1)) :: auxMatrix
     !--------------------------------------------------------------------
 
     character(len=*), parameter :: csubid = "deriv_cov"
 
     real(dp)                                                    :: mu           ! Earth's gravity constant
-    real(dp), dimension(size(setMatrix,1),size(setMatrix,1))    :: pdm          ! partial derivative matrix
+    real(kind=16), dimension(size(setMatrix,1),size(setMatrix,1))    :: pdm          ! partial derivative matrix
     real(dp), dimension(3)                                      :: r            ! radius vector in body-fixed frame
     real(dp), dimension(3)                                      :: v            ! velocity vector in body-fixed frame
     real(dp)                                                    :: r3           ! r**3
     real(dp)                                                    :: r5           ! r**5
     real(dp), dimension(3,3)                                    :: tempMat
 
-    integer                                                     :: i            ! loop counter
+    integer                                                     :: i, j, k            ! loop counter
 
     if(isControlled()) then
       if(hasToReturn()) return
       call checkIn(csubid)
     end if
-
+    
     !** convert ECI state to ECEF, as acceleration are evaluated in body-fixed frame
     call reduction%inertial2earthFixed(r_eci, v_eci, time_mjd, r, v)
-
+    
     mu = getEarthGravity()
-
+    
     r3 = mag(r)**3.d0
     r5 = mag(r)**5.d0
 
@@ -909,7 +910,7 @@ contains
     pdm(4,3) = pdm(6,1)
     pdm(5,3) = pdm(6,2)
     pdm(6,3) = 3.d0*mu*r(3)*r(3)/r5 - mu/r3
-
+    ! write(*,*) pdm
 
     !============================================================
     !
@@ -935,10 +936,9 @@ contains
 
     !** convert to inertial frame, as other contributions are computed according to the inertial frame:
     tempMat = reduction%getRotationMatrixRC2IT(time_mjd)
-
     pdm(4:6,1:3) = matmul(matmul(transpose(tempMat), pdm(4:6,1:3)), tempMat)
-
-
+    
+    
     !============================================================
     !
     ! Add contribution due to atmospheric drag
@@ -1063,12 +1063,11 @@ contains
 
 !    write(51,'(36(e14.7e2,x))') dsetMatrix
 
-
     !** done!
     if(isControlled()) then
       call checkOut(csubid)
     end if
-
+    ! write(*,*) time_mjd, pdm
     return
 
   end subroutine deriv_cov

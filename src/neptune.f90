@@ -58,6 +58,7 @@ module libneptune
     use slam_types,             only: dp
     use slam_rframes,           only: FRAME_NAME_LENGTH => MAX_ID_LENGTH, getFrameName, REF_FRAME_GCRF
     use slam_orbit_types,       only: state_t, kepler_t, covariance_t
+    use slam_linAlgebra,        only: invert_matrix   
 
     implicit none
 
@@ -547,13 +548,14 @@ contains
     integer                 :: ierr                                             ! error flag
     integer                 :: nresets                                          ! number of subsequent resets for one integration step
     integer                 :: reset                                            ! initialisation flag
-    integer                 :: otype                                            ! characterising orbit type
+    integer                 :: otype, i                                            ! characterising orbit type
 
     logical                 :: flag_backward                                    ! backward propagation flag
     logical                 :: flag_exit                                        ! exit flag
 
-    real(dp),dimension(6,6) :: corrMat                                          ! correlation matrix
-    real(dp),dimension(6,6) :: cumSet                                           ! cumulated state transition matrix
+    real(dp),dimension(6,6) :: corrMat , cumSet_out 
+    real(dp),dimension(6,6) :: aux2mat                                       ! correlation matrix
+    real(kind=16),dimension(6,6) :: cumSet, auxmat                                           ! cumulated state transition matrix
     real(dp)                :: dtmp                                             ! auxiliary
     real(dp)                :: delta_time                                       ! step size actually used for each propagation step
     real(dp)                :: end_epoch_sec                                    ! end epoch in seconds (MJD)
@@ -563,7 +565,7 @@ contains
     real(dp)                :: prop_counter                                     ! propagation time counter in seconds
     real(dp)                :: request_time                                     ! requested time in numerical integration loop
     real(dp)                :: propCounterAtReset                               ! propCounter at last reset - required to prevent infinite loops
-    real(dp),dimension(6,6) :: set                                              ! state error transition matrix
+    real(kind=16),dimension(6,6) :: set                                              ! state error transition matrix
     real(dp)                :: start_epoch_sec                                  ! start epoch in seconds (MJD)
     type(kepler_t)          :: kep                                              ! mean kepler elements for correlation matrix computation
     type(state_t)           :: last_state_out                                   ! saving the last state vector which has been written to output
@@ -576,12 +578,15 @@ contains
     real(dp)                :: restored_request_time                            ! Requested time before the intermediate step got necessary
     logical                 :: force_no_interpolation
     real(dp)                :: upcoming_maneuver_epoch_mjd
+    real(dp), dimension(3,3) :: eigenvectores
+    real(dp), dimension(3) :: eigenvalues
 
     restored_request_time = 0.d0
     prop_counter = 0.0d0
     propCounterAtReset = 0.0d0
     lastPropCounterSuccess = 0.0d0
-
+    call identity_matrix(aux2mat)
+    set = aux2mat
     if(isControlled()) then
       if(hasToReturn()) return
       call checkIn(csubid)
@@ -793,7 +798,8 @@ contains
           call neptune%storeData(state_out%r, state_out%v, dtmp)
           ! store covariance matrix data if requested
           if(neptune%numerical_integrator%getCovariancePropagationFlag()) then
-            call neptune%storeSetData(cumSet, dtmp)
+            cumSet_out = cumSet
+            call neptune%storeSetData(cumSet_out, dtmp)
             call neptune%storeCovData(covar_out%elem, dtmp)
           end if
           last_state_out   = state_out
@@ -982,12 +988,24 @@ contains
           if(hasFailed()) return
 
           !** cumulate state transition matrix
-          cumSet = matmul(set,cumSet)
+          ! do i=1,6
+          !   write(*,*) i, (set(i,1)+ set(i,2)+ set(i,3)+ set(i,4)+ set(i,5)+ set(i,6))/6
+          ! end do
+          auxmat = set 
+          write(*,*) set
+          cumSet = matmul(auxmat,cumSet)
+          ! cumSet = set
+          cumSet_out = cumSet
+          ! write(*,*) request_time, cumSet_out
+          ! open(unit=40,file='data.csv',Access = 'append',Status='old')
+          ! write(40,*) request_time, ";", cumSet(1,1), ";", cumSet(2,2), ";", cumSet(1,2), ";", cumSet(2,1)
+          ! close(40)
+          ! write(*,*) request_time, cumSet
+
+          
           set_out%elem = cumSet
-
           !** compute new covariance matrix for given time
-          covar_out%elem = matmul(matmul(cumSet,covar_in%elem),transpose(cumSet))
-
+          covar_out%elem = matmul(matmul(cumSet_out,covar_in%elem),transpose(cumSet_out))
           if(neptune%correlation_model%getNoisePropagationFlag()) then
               corrMat                 = neptune%correlation_model%getCorrelationMatrix(request_time)
               covar_out%elem(1:6,1:6) = covar_out%elem(1:6,1:6) + corrMat
@@ -1010,5 +1028,99 @@ contains
     return
 
   end subroutine propagate_set
+
+
+  subroutine get_eigen_3x3(matrix, eigenvalues, eigenvectores)
+    use rss_math,               only: determinant
+    use slam_math,              only: pi,cross
+
+  
+    real(dp), dimension(3,3), intent(inout) :: matrix
+    real(dp), dimension(3,3), intent(inout) :: eigenvectores
+    real(dp), dimension(3),   intent(inout) :: eigenvalues
+
+    real(dp), dimension(3) :: eigenvalues_temp, auxvec
+    real(dp) :: mindist, auxval
+  
+    real(dp) :: p
+    real(dp) :: p1 
+    real(dp) :: p2
+    real(dp) :: Q
+    real(dp), dimension(3,3) :: B
+    real(dp), dimension(3,3) :: C, Cinv, diagonal
+
+    real(dp), dimension(3,3) :: I
+    real(dp) :: r
+    real(dp) :: phi
+    integer :: j, k
+    integer :: mindistpoint
+    
+    ! Prepare Identity Matrix
+    I = 0.d0
+    I(1,1) = 1.d0
+    I(2,2) = 1.d0
+    I(3,3) = 1.d0
+
+    ! Calculate eigenvalues
+    p1 = matrix(1,2)**2.d0 + matrix(1,3)**2.d0 + matrix(2,3)**2.d0
+    if (p1 == 0.d0) then
+        eigenvalues(1)=matrix(1,1)
+        eigenvalues(2)=matrix(2,2)
+        eigenvalues(3)=matrix(3,3)
+        eigenvectores = I
+    else
+        q  = (matrix(1,1) + matrix(2,2) + matrix(3,3))/3.d0
+        p2 = (matrix(1,1) - q)**2.d0 + (matrix(2,2) - q)**2.d0 + (matrix(3,3) - q)**2.d0 + 2.d0 * p1
+        p  = sqrt(p2 / 6.d0)
+        B  = (1.d0 / p) * (matrix - q * I)
+        r  = 0.5d0 * determinant(3,B)
+    
+        if (r .le. -1.d0) then
+            phi = pi / 3.d0
+        else if (r .ge. 1.d0) then
+            phi = 0.d0
+        else
+            phi = acos(r) / 3.d0
+        end if
+    
+        eigenvalues(1) = q + 2.d0 * p * cos(phi)
+        eigenvalues(3) = q + 2.d0 * p * cos(phi + (2.d0 * pi / 3.d0))
+        eigenvalues(2) = 3.d0 * q - eigenvalues(1) - eigenvalues(3) 
+
+        ! Make sure the eigenvalues have the same order as the main diagonal
+        do j = 1,3
+        mindist = abs(matrix(1,1)-eigenvalues(j))
+        mindistpoint = 1
+        do k=2,3
+            if(abs(matrix(k,k)-eigenvalues(j)) .lt.  mindist) then
+            mindist = abs(matrix(k,k)-eigenvalues(j))
+            mindistpoint = k
+            end if
+        end do
+        eigenvalues_temp(mindistpoint) = eigenvalues(j)
+        end do
+    
+        eigenvalues(1) = eigenvalues_temp(1)
+        eigenvalues(2) = eigenvalues_temp(2)
+        eigenvalues(3) = eigenvalues_temp(3)
+    
+        ! Calculate eigenvectores
+        C = matrix - eigenvalues(1) * I
+        auxvec = cross(C(:,1),C(:,2))
+        auxval = sqrt(auxvec(1)**2.d0+auxvec(2)**2.d0+auxvec(3)**2.d0)
+        eigenvectores(1,:) = (1.d0/auxval)*auxvec
+        C = matrix - eigenvalues(2) * I
+    
+        auxvec = cross(C(:,1),C(:,2))
+        auxval = sqrt(auxvec(1)**2.d0+auxvec(2)**2.d0+auxvec(3)**2.d0)
+        eigenvectores(2,:) = (1.d0/auxval)*auxvec
+        C = matrix - eigenvalues(3) * I
+    
+        auxvec = cross(C(:,1),C(:,2))
+        auxval = sqrt(auxvec(1)**2.d0+auxvec(2)**2.d0+auxvec(3)**2.d0)
+        eigenvectores(3,:) = (1.d0/auxval)*auxvec
+    end if
+  end subroutine get_eigen_3x3
+
 
 end module libneptune
